@@ -1,0 +1,339 @@
+// =========================================================================
+// BACKEND GOOGLE APPS SCRIPT - JURNAL 7 KEBIASAAN ANAK INDONESIA HEBAT (V5.2)
+// =========================================================================
+// Ganti ID Spreadsheet di bawah ini dengan ID Google Sheets Anda sendiri
+const SHEET_ID = '1lNSnbLFFHlELeYlUyHU6c8oYo7RN-kBjjpxMbdokMlk';
+
+/**
+ * 1. ROUTING WEB APP (TAMPILAN HTML)
+ * Melayani permintaan GET untuk merender halaman utama aplikasi Jurnal.
+ */
+function doGet(e) {
+  return HtmlService.createTemplateFromFile('index')
+      .evaluate()
+      .setTitle('Jurnal 7 KAIH - SDIT Muhammadiyah')
+      .addMetaTag('viewport', 'width=device-width, initial-scale=1')
+      .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+/**
+ * 2. PENERIMA REQUEST API (POST) DARI FRONTEND
+ * Mengarahkan setiap request dari aplikasi web ke fungsi logika yang sesuai.
+ */
+function doPost(e) {
+  const sheet = SpreadsheetApp.openById(SHEET_ID);
+  
+  try {
+    const data = JSON.parse(e.postData.contents);
+    const action = data.action;
+    
+    // Router aksi berdasarkan parameter yang dikirim oleh frontend
+    if (action === 'get_initial_data') {
+      return createJSONResponse(getInitialData(sheet));
+    }
+    if (action === 'login') {
+      return createJSONResponse(handleLogin(sheet, data.username, data.password));
+    }
+    if (action === 'submit_jurnal') {
+      return createJSONResponse(handleSubmitJurnal(sheet, data));
+    }
+    if (action === 'add_user') {
+      return createJSONResponse(handleAddUser(sheet, data));
+    }
+    if (action === 'add_kelas') {
+      return createJSONResponse(handleAddKelas(sheet, data));
+    }
+    if (action === 'add_komentar') {
+      return createJSONResponse(handleAddKomentar(sheet, data));
+    }
+    if (action === 'add_dashboard') {
+      return createJSONResponse(handleAddDashboard(sheet, data));
+    }
+    
+    return createJSONResponse({ status: 'error', message: 'Aksi tidak ditemukan' });
+  } catch (error) {
+    return createJSONResponse({ status: 'error', message: 'Terjadi kesalahan sistem: ' + error.message });
+  }
+}
+
+/**
+ * Helper untuk menyusun HTTP Response dengan format JSON.
+ */
+function createJSONResponse(obj) {
+  return ContentService.createTextOutput(JSON.stringify(obj))
+                       .setMimeType(ContentService.MimeType.JSON);
+}
+
+/**
+ * 3. FUNGSI SETUP DATABASE OTOMATIS
+ * Menyiapkan struktur tabel (sheet) utama beserta data demo jika sheet belum ada.
+ * Jalankan fungsi ini sekali di Google Apps Script Editor sebelum mendeploy Web App.
+ */
+function setupDatabase() {
+  const sheet = SpreadsheetApp.openById(SHEET_ID);
+  
+  // Create ADMIN sheet
+  let wsAdmin = sheet.getSheetByName('ADMIN');
+  if (!wsAdmin) {
+    wsAdmin = sheet.insertSheet('ADMIN');
+    wsAdmin.appendRow(['id', 'nama', 'username', 'password']);
+    wsAdmin.appendRow(['ADM001', 'Admin Utama', 'admin', 'admin123']);
+  }
+  
+  // Create GURU sheet
+  let wsGuru = sheet.getSheetByName('GURU');
+  if (!wsGuru) {
+    wsGuru = sheet.insertSheet('GURU');
+    wsGuru.appendRow(['id', 'nama', 'kelas', 'username', 'password']);
+    wsGuru.appendRow(['GUR001', 'Ustadzah Fatimah', 'Kelas 1A', 'fatimah', 'guru123']);
+  }
+  
+  // Create SISWA sheet
+  let wsSiswa = sheet.getSheetByName('SISWA');
+  if (!wsSiswa) {
+    wsSiswa = sheet.insertSheet('SISWA');
+    wsSiswa.appendRow(['id', 'nama', 'kelas', 'username', 'password', 'wa_ortu']);
+    wsSiswa.appendRow(['SIS001', 'Budi Santoso', 'Kelas 1A', 'budi', 'siswa123', '628123456789']);
+  }
+  
+  // Create JURNAL sheet
+  let wsJurnal = sheet.getSheetByName('JURNAL');
+  if (!wsJurnal) {
+    wsJurnal = sheet.insertSheet('JURNAL');
+    wsJurnal.appendRow(['tanggal', 'nama', 'kelas', 'bangun_pagi', 'ibadah', 'olahraga', 'makan', 'belajar', 'bermasyarakat', 'tidur', 'total', 'komentar_guru']);
+  }
+  
+  // Create DASHBOARD sheet
+  let wsDashboard = sheet.getSheetByName('DASHBOARD');
+  if (!wsDashboard) {
+    wsDashboard = sheet.insertSheet('DASHBOARD');
+    wsDashboard.appendRow(['kategori', 'judul', 'isi', 'tanggal']);
+    wsDashboard.appendRow(['Info Terbaru', 'Sistem Baru', 'Memisahkan panel Guru dan Siswa serta menambahkan filter kelas kustom.', '14/06/2026']);
+  }
+  
+  // Create KELAS sheet
+  let wsKelas = sheet.getSheetByName('KELAS');
+  if (!wsKelas) {
+    wsKelas = sheet.insertSheet('KELAS');
+    wsKelas.appendRow(['id_kelas', 'nama_kelas']);
+    wsKelas.appendRow(['KLS001', 'Kelas 1A']);
+    wsKelas.appendRow(['KLS002', 'Kelas 1B']);
+  }
+}
+
+/**
+ * 4. FUNGSI LOAD DATA AWAL
+ * Mengambil dan menyatukan semua database pengguna (Admin, Guru, Siswa), jurnal, 
+ * pengumuman dashboard, dan data kelas untuk dikirimkan secara berkala ke frontend.
+ */
+function getInitialData(sheet) {
+  const adminData = getRowsData(sheet.getSheetByName('ADMIN')).map(u => { 
+    u.role = 'ADMIN'; 
+    u.kelas = 'Semua Kelas'; 
+    return u; 
+  });
+  const guruData = getRowsData(sheet.getSheetByName('GURU')).map(u => { 
+    u.role = 'GURU'; 
+    return u; 
+  });
+  const siswaData = getRowsData(sheet.getSheetByName('SISWA')).map(u => { 
+    u.role = 'SISWA'; 
+    return u; 
+  });
+  
+  // Menggabungkan seluruh data pengguna untuk verifikasi terpadu
+  const allUsers = [].concat(adminData, guruData, siswaData);
+  
+  return {
+    users: allUsers,
+    jurnal: getRowsData(sheet.getSheetByName('JURNAL')),
+    dashboard: getRowsData(sheet.getSheetByName('DASHBOARD')).reverse(),
+    kelas: getRowsData(sheet.getSheetByName('KELAS'))
+  };
+}
+
+/**
+ * Mengubah baris-baris pada lembar kerja menjadi objek berpasangan (key-value)
+ * berdasarkan nama kolom (header) pada baris pertama.
+ */
+function getRowsData(sheet) {
+  if (!sheet) return [];
+  const range = sheet.getDataRange();
+  const values = range.getValues();
+  if (values.length <= 1) return []; 
+  
+  const headers = values[0];
+  const data = [];
+  for (let i = 1; i < values.length; i++) {
+    const row = {};
+    for (let j = 0; j < headers.length; j++) {
+      row[headers[j]] = values[i][j];
+    }
+    data.push(row);
+  }
+  return data;
+}
+
+/**
+ * 5. FUNGSI LOGIKA LOGIN
+ * Memvalidasi apakah kombinasi username dan password terdaftar pada basis data.
+ */
+function handleLogin(sheet, username, password) {
+  const allUsers = getInitialData(sheet).users;
+  const match = allUsers.find(u => 
+    String(u.username).toLowerCase() === String(username).toLowerCase() && 
+    String(u.password) === String(password)
+  );
+  
+  if (match) {
+    return { status: 'success', user: match };
+  }
+  return { status: 'error', message: 'Username atau Sandi salah!' };
+}
+
+/**
+ * 6. LOGIKA INPUT JURNAL HARIAN & PENGHITUNGAN SKOR
+ * Menyimpan data jurnal siswa ke Google Sheets dan mengalkulasi total perolehan skor harian.
+ */
+function handleSubmitJurnal(sheet, data) {
+  const wsJurnal = sheet.getSheetByName('JURNAL');
+  
+  let skorBangun = hitungSkorBangun(data.bangun_pagi);
+  let skorIbadah = data.ibadah === 'Ya' ? 20 : (data.ibadah === 'Sebagian' ? 10 : 0);
+  let skorOlahraga = data.olahraga === 'Ya' ? 10 : 0;
+  let skorMakan = data.makan === 'Sehat' ? 10 : (data.makan === 'Biasa' ? 5 : 0);
+  let skorBelajar = data.belajar === 'Ya' ? 10 : 0;
+  let skorBermasyarakat = data.bermasyarakat.trim().length > 0 ? 10 : 0;
+  let skorTidur = hitungSkorTidur(data.tidur);
+  
+  // Total skor diakumulasikan dan dibatasi maksimal bernilai 100
+  let totalSkor = Math.min(100, skorBangun + skorIbadah + skorOlahraga + skorMakan + skorBelajar + skorBermasyarakat + skorTidur);
+  
+  wsJurnal.appendRow([ 
+    data.tanggal, 
+    data.nama, 
+    data.kelas, 
+    data.bangun_pagi, 
+    data.ibadah, 
+    data.olahraga, 
+    data.makan, 
+    data.belajar, 
+    data.bermasyarakat, 
+    data.tidur, 
+    totalSkor, 
+    "" // Kolom komentar guru diinisialisasi kosong
+  ]);
+  
+  return { status: 'success', message: 'Jurnal harian terekam!', total_skor: totalSkor };
+}
+
+/**
+ * Menghitung kontribusi skor dari kebiasaan Bangun Pagi.
+ */
+function hitungSkorBangun(waktu) {
+  if (!waktu || waktu === '-') return 0;
+  let jP = waktu.split(":"); 
+  let n = parseInt(jP[0]) * 100 + parseInt(jP[1]);
+  if (n <= 400) return 50; 
+  if (n <= 500) return 30; 
+  if (n <= 530) return 10; 
+  return 0; 
+}
+
+/**
+ * Menghitung kontribusi skor dari kebiasaan Tidur tepat waktu.
+ */
+function hitungSkorTidur(waktu) {
+  if (!waktu || waktu === '-') return 0;
+  let jP = waktu.split(":"); 
+  let n = parseInt(jP[0]) * 100 + parseInt(jP[1]);
+  if (n >= 2000 && n <= 2100) return 20; 
+  if (n > 2100 && n <= 2200) return 10; 
+  return 0;
+}
+
+/**
+ * 7. PENGELOLAAN DATA PENGGUNA (TAMBAH USER)
+ * Mendaftarkan guru atau siswa baru secara langsung ke tabel spesifik masing-masing peran.
+ */
+function handleAddUser(sheet, data) {
+  const role = data.role.toUpperCase();
+  let sheetName = 'SISWA';
+  if (role === 'GURU') sheetName = 'GURU';
+  if (role === 'ADMIN') sheetName = 'ADMIN';
+  
+  const ws = sheet.getSheetByName(sheetName);
+  if (!ws) return { status: 'error', message: `Sheet untuk peran ${sheetName} tidak ditemukan!` };
+  
+  // Cek keunikan username di seluruh jenis pengguna
+  const allUsers = getInitialData(sheet).users;
+  if (allUsers.find(u => String(u.username).toLowerCase() === String(data.username).toLowerCase())) {
+    return { status: 'error', message: 'Username sudah digunakan!' };
+  }
+  
+  const lastIdNum = ws.getLastRow();
+  let prefix = 'SIS';
+  if (role === 'GURU') prefix = 'GUR';
+  if (role === 'ADMIN') prefix = 'ADM';
+  const newId = prefix + String(lastIdNum).padStart(3, '0');
+  
+  if (role === 'GURU') {
+    ws.appendRow([newId, data.nama, data.kelas, data.username, data.password]);
+  } else if (role === 'ADMIN') {
+    ws.appendRow([newId, data.nama, data.username, data.password]);
+  } else {
+    ws.appendRow([newId, data.nama, data.kelas, data.username, data.password, data.wa_ortu || '-']);
+  }
+  
+  return { status: 'success', message: `Berhasil mendaftarkan ${data.nama} sebagai ${role}.` };
+}
+
+/**
+ * 8. PENGELOLAAN DATA KELAS BARU
+ * Membuat entri kelas baru untuk memisahkan pengawasan wali kelas.
+ */
+function handleAddKelas(sheet, data) {
+  const wsKelas = sheet.getSheetByName('KELAS');
+  const values = wsKelas.getDataRange().getValues();
+  for (let i = 1; i < values.length; i++) {
+    if (values[i][1].toLowerCase() === data.nama_kelas.toLowerCase()) {
+      return { status: 'error', message: 'Nama Kelas tersebut sudah terdaftar!' };
+    }
+  }
+  
+  wsKelas.appendRow(["KLS" + String(values.length).padStart(3, '0'), data.nama_kelas]);
+  return { status: 'success', message: `Kelas ${data.nama_kelas} berhasil dibuat!` };
+}
+
+/**
+ * 9. EVALUASI DAN KOMENTAR GURU
+ * Mengizinkan guru/wali kelas menyisipkan komentar/catatan harian pada baris jurnal siswa.
+ */
+function handleAddKomentar(sheet, data) {
+  const ws = sheet.getSheetByName('JURNAL');
+  const vals = ws.getDataRange().getValues();
+  for (let i = 1; i < vals.length; i++) {
+    if (vals[i][1] === data.nama_siswa && vals[i][2] === data.kelas && String(vals[i][0]) === String(data.tanggal)) {
+      // Menyimpan catatan di kolom ke-12 (Kolom L)
+      ws.getRange(i + 1, 12).setValue(data.komentar); 
+      return { status: 'success', message: 'Komentar dan evaluasi berhasil dikirim!' };
+    }
+  }
+  return { status: 'error', message: 'Jurnal harian siswa untuk tanggal tersebut tidak ditemukan!' };
+}
+
+/**
+ * 10. TERBITKAN PENGUMUMAN BARU
+ * Menyimpan pengumuman atau info penting sekolah ke papan pengumuman dashboard.
+ */
+function handleAddDashboard(sheet, data) {
+  const ws = sheet.getSheetByName('DASHBOARD');
+  ws.appendRow([
+    data.kategori, 
+    data.judul, 
+    data.isi, 
+    Utilities.formatDate(new Date(), Session.getScriptTimeZone(), "dd/MM/yyyy HH:mm")
+  ]);
+  return { status: 'success', message: 'Pengumuman sekolah berhasil dipublikasikan!' };
+}
+
